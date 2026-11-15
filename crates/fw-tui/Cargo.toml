@@ -1,0 +1,19 @@
+[package]
+name = "fw-tui"
+description = "Terminal dashboard: pure model and view, ratatui drawing and a terminal guard behind a feature"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Off by default: the model and sanitizer build without a terminal library.
+tui = ["dep:ratatui", "dep:crossterm"]
+
+[dependencies]
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }
+
+[lints]
+workspace = true
