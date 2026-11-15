@@ -1,0 +1,31 @@
+[package]
+name = "fw-app"
+description = "Reference service built from the fw-* crates: check, serve and an optional top dashboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The `top` subcommand. Off by default: the default binary has no terminal dependencies.
+tui = ["dep:fw-tui", "fw-tui/tui"]
+
+[dependencies]
+fw-config = { path = "../crates/fw-config" }
+fw-auth = { path = "../crates/fw-auth" }
+fw-serve = { path = "../crates/fw-serve" }
+fw-tui = { path = "../crates/fw-tui", optional = true }
+axum.workspace = true
+clap = { workspace = true }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# O_NOFOLLOW for the log file; std has no constant for it.
+libc.workspace = true
+
+[lints]
+workspace = true

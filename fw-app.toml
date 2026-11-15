@@ -1,0 +1,29 @@
+# Demo config for fw-app. Check it with: fw-app check --config fw-app.toml
+
+[server]
+listen = "127.0.0.1:8080"
+max_connections = 256
+max_connections_per_addr = 16
+header_read_timeout_secs = 30
+
+# Uncomment to serve HTTPS. The key file must not be readable by group or others (chmod 600).
+# [tls]
+# cert = "/etc/fw-app/cert.pem"
+# key = "/etc/fw-app/key.pem"
+
+[log]
+level = "info"
+format = "text"
+stderr = true
+# file = "/var/log/fw-app.log"
+
+[auth]
+throttle = true
+max_failures = 10
+window_secs = 60
+
+# Demo only. The hash is sha256 of the token "demo-token-change-me". Replace the token and hash
+# before any real use: printf '%s' "$TOKEN" | sha256sum
+[[auth.tokens]]
+name = "peer-a"
+token_sha256 = "b5d56f2eacf505c2639b22468f3a8b1bcaf7d619cadbab47dc6ce515fc4c3612"
