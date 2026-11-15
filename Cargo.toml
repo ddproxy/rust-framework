@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/fw-config"]
+members = ["crates/fw-config", "crates/fw-auth"]
 resolver = "2"
 
 [workspace.package]
