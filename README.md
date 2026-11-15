@@ -51,6 +51,13 @@ Make a token hash for the config with `printf '%s' "$TOKEN" | sha256sum`. Then c
 4. Replace the routes in `app/src/service.rs` and the config keys in `crates/*/src/lib.rs`. Keep the gates green.
 5. Regenerate the lockfile after the rename with `cargo generate-lockfile` (or `cargo build`), then commit.
 
+## Behaviour worth knowing
+
+- The login throttle has no success reset. A caller who holds one valid token cannot clear the failure count between guesses at another, so a count only ends with its window.
+- A request that overruns `request_timeout_secs` gets a 408. Body limits apply to extractors (the demo sets 64 KiB); a raw `Body` has none, so a handler that reads one must bound it.
+- A non-loopback `listen` needs `[tls]`; bearer tokens never travel in the clear off the host.
+- Names drawn in the terminal pass through `fw_tui::sanitize::printable`: control characters, bidi overrides and zero-width characters become `?`.
+
 ## Known gaps (for review)
 
 - The log file has no rotation and no reload; `logging` is a single-file append.
@@ -60,6 +67,7 @@ Make a token hash for the config with `printf '%s' "$TOKEN" | sha256sum`. Then c
 - The release workflow runs only on `github.com` (its `if:` guard, copied from Reiki); a forge-hosted copy needs its own release step.
 - Token length is not enforced at config time, because a hash cannot show how long its source was.
 - The `top` dashboard shows synthetic data; there is no real feed.
+- The CI workflow keeps Reiki's `curl | sh` rustup fallback for runners without Rust; drop it if every runner you use has Rust.
 
 ## License
 

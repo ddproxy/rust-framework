@@ -18,6 +18,13 @@ fn router() -> Router {
     let app = Router::new()
         .route("/ping", get(|| async { "pong" }))
         .route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                "late"
+            }),
+        )
+        .route(
             "/peer",
             get(|Extension(PeerAddr(peer)): Extension<PeerAddr>| async move { peer.to_string() }),
         );
@@ -29,6 +36,7 @@ fn options(max_connections: usize, per_addr: usize) -> ServeOptions {
         max_connections,
         max_connections_per_addr: per_addr,
         header_read_timeout: Duration::from_secs(5),
+        request_timeout: Duration::from_secs(5),
     }
 }
 
@@ -232,4 +240,22 @@ fn a_tls_load_names_a_missing_file() {
     let missing = std::env::temp_dir().join("fw-serve-no-such-cert.pem");
     let error = fw_serve::tls::load(&missing, &missing).unwrap_err();
     assert!(error.contains("fw-serve-no-such-cert.pem"), "{error}");
+}
+
+#[tokio::test]
+async fn a_handler_that_overruns_the_request_timeout_gets_a_408() {
+    let mut short = options(8, 4);
+    short.request_timeout = Duration::from_millis(200);
+    let server = start(short, None).await;
+    let started = std::time::Instant::now();
+    let response = plain(server.addr, &get_request("/slow", "")).await;
+    assert!(status_line(&response).contains("408"), "{response}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let ok = plain(server.addr, &get_request("/ping", "")).await;
+    assert!(
+        status_line(&ok).contains("200"),
+        "other requests still work: {ok}"
+    );
+    server.stop.send(()).unwrap();
+    let _ = server.task.await;
 }

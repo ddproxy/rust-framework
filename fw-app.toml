@@ -5,6 +5,7 @@ listen = "127.0.0.1:8080"
 max_connections = 256
 max_connections_per_addr = 16
 header_read_timeout_secs = 30
+request_timeout_secs = 60
 
 # Uncomment to serve HTTPS. The key file must not be readable by group or others (chmod 600).
 # [tls]

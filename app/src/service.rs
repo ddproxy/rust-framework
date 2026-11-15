@@ -47,7 +47,9 @@ pub fn router(state: Arc<AppState>) -> Router {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/whoami", get(whoami))
-        .with_state(state);
+        .with_state(state)
+        // Extractors read at most this much; a raw `Body` has no limit of its own.
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024));
     with_request_ids(app)
 }
 
@@ -85,12 +87,7 @@ async fn whoami(
         .and_then(|value| value.to_str().ok())
         .and_then(bearer_token);
     match presented.and_then(|token| state.tokens.verify(token)) {
-        Some(name) => {
-            if let Some(throttle) = &state.throttle {
-                throttle.succeed(ip);
-            }
-            json_response(StatusCode::OK, &json!({ "name": name }))
-        }
+        Some(name) => json_response(StatusCode::OK, &json!({ "name": name })),
         None => {
             if let Some(throttle) = &state.throttle {
                 throttle.fail(ip, now);
@@ -130,6 +127,7 @@ pub async fn run(config: &Config, config_path: &Path) -> Result<(), String> {
         max_connections: config.server.max_connections,
         max_connections_per_addr: config.server.max_connections_per_addr,
         header_read_timeout: Duration::from_secs(config.server.header_read_timeout_secs),
+        request_timeout: Duration::from_secs(config.server.request_timeout_secs),
     };
     serve(listener, router(state), options, tls, shutdown_signal()).await;
     tracing::info!("stopped");
@@ -166,6 +164,7 @@ mod tests {
             max_connections: 16,
             max_connections_per_addr: 8,
             header_read_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(5),
         };
         tokio::spawn(serve(listener, router(state), options, None, async move {
             let _ = stopped.await;

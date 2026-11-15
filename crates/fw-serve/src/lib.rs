@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::response::IntoResponse;
 use axum::Router;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use limit::AddrLimit;
@@ -31,6 +32,8 @@ pub struct ServeOptions {
     pub max_connections: usize,
     pub max_connections_per_addr: usize,
     pub header_read_timeout: Duration,
+    /// Longest a handler may take; a request that overruns it gets a 408.
+    pub request_timeout: Duration,
 }
 
 /// The remote socket address of a connection. The listener puts it in every request's
@@ -75,11 +78,11 @@ pub async fn serve(
         };
         let router = router.clone();
         let tls = tls.clone();
-        let timeout = options.header_read_timeout;
+        let timeouts = (options.header_read_timeout, options.request_timeout);
         tokio::spawn(async move {
             let _slot = slot;
             let _addr_slot = addr_slot;
-            if let Err(error) = handle(stream, peer, router, tls, timeout).await {
+            if let Err(error) = handle(stream, peer, router, tls, timeouts).await {
                 tracing::debug!(%peer, %error, "connection ended with an error");
             }
         });
@@ -102,16 +105,16 @@ async fn handle(
     peer: SocketAddr,
     router: Router,
     tls: Option<Arc<rustls::ServerConfig>>,
-    header_read_timeout: Duration,
+    timeouts: (Duration, Duration),
 ) -> Result<(), BoxError> {
     match tls {
-        None => connection(stream, router, peer, header_read_timeout).await?,
+        None => connection(stream, router, peer, timeouts).await?,
         Some(config) => {
             let accept = tokio_rustls::TlsAcceptor::from(config).accept(stream);
             let stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, accept)
                 .await
                 .map_err(|_| "TLS handshake timed out")??;
-            connection(stream, router, peer, header_read_timeout).await?;
+            connection(stream, router, peer, timeouts).await?;
         }
     }
     Ok(())
@@ -121,7 +124,7 @@ async fn connection<IO>(
     io: IO,
     router: Router,
     peer: SocketAddr,
-    header_read_timeout: Duration,
+    (header_read_timeout, request_timeout): (Duration, Duration),
 ) -> Result<(), hyper::Error>
 where
     IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -130,7 +133,16 @@ where
         let mut router = router.clone();
         let mut req = req.map(Body::new);
         req.extensions_mut().insert(PeerAddr(peer));
-        async move { router.call(req).await }
+        async move {
+            match tokio::time::timeout(request_timeout, router.call(req)).await {
+                Ok(response) => response,
+                Err(_) => Ok((
+                    axum::http::StatusCode::REQUEST_TIMEOUT,
+                    "request timed out\n",
+                )
+                    .into_response()),
+            }
+        }
     });
     hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())

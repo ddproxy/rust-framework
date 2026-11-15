@@ -78,19 +78,11 @@ impl LoginThrottle {
         if now.saturating_duration_since(entry.1) >= window {
             *entry = (0, now);
         }
-        entry.0 += 1;
+        entry.0 = entry.0.saturating_add(1);
         entry.0
     }
 
-    /// A good login clears the address's count.
-    pub fn succeed(&self, ip: IpAddr) {
-        let ip = throttle_key(ip);
-        self.seen
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&ip);
-    }
-
+    // There is deliberately no success reset: see the test of the same intent below.
     #[cfg(test)]
     fn tracked(&self) -> usize {
         self.seen.lock().unwrap().len()
@@ -143,15 +135,27 @@ mod tests {
     }
 
     #[test]
-    fn a_good_login_clears_the_count() {
+    fn the_count_is_never_cleared_by_another_login_only_by_its_window() {
+        // A caller holding one valid credential must not be able to reset the count between
+        // guesses at another, so the throttle has no success reset.
         let throttle = throttle();
         let ip: IpAddr = "192.0.2.7".parse().unwrap();
         let t0 = Instant::now();
-        for _ in 0..3 {
+        for _ in 0..10 {
             throttle.fail(ip, t0);
         }
-        throttle.succeed(ip);
-        assert!(throttle.blocked(ip, t0).is_none());
+        assert!(throttle.blocked(ip, t0).is_some());
+        assert!(throttle.blocked(ip, t0 + Duration::from_secs(30)).is_some());
+        assert!(throttle.blocked(ip, t0 + Duration::from_secs(61)).is_none());
+    }
+
+    #[test]
+    fn a_count_at_the_maximum_saturates_instead_of_overflowing() {
+        let throttle = throttle();
+        let ip: IpAddr = "192.0.2.8".parse().unwrap();
+        let t0 = Instant::now();
+        throttle.seen.lock().unwrap().insert(ip, (u32::MAX, t0));
+        assert_eq!(throttle.fail(ip, t0), u32::MAX);
     }
 
     #[test]

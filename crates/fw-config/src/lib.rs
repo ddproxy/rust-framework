@@ -37,6 +37,8 @@ pub struct ServerConfig {
     pub max_connections: usize,
     pub max_connections_per_addr: usize,
     pub header_read_timeout_secs: u64,
+    /// Longest a request may take from the end of its headers to the end of its response.
+    pub request_timeout_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -46,6 +48,7 @@ impl Default for ServerConfig {
             max_connections: 256,
             max_connections_per_addr: 16,
             header_read_timeout_secs: 30,
+            request_timeout_secs: 60,
         }
     }
 }
@@ -166,6 +169,26 @@ impl Config {
                 format!(
                     "header_read_timeout_secs must be 1 to 300 (got {})",
                     server.header_read_timeout_secs
+                ),
+            );
+        }
+        if !(1..=600).contains(&server.request_timeout_secs) {
+            return invalid(
+                "[server]",
+                format!(
+                    "request_timeout_secs must be 1 to 600 (got {})",
+                    server.request_timeout_secs
+                ),
+            );
+        }
+        // Bearer tokens travel in the clear without TLS, so only loopback may go without it.
+        let listen: SocketAddr = server.listen.parse().expect("checked above");
+        if self.tls.is_none() && !listen.ip().is_loopback() {
+            return invalid(
+                "[server]",
+                format!(
+                    "listen {} is not a loopback address, so [tls] is required",
+                    server.listen
                 ),
             );
         }
@@ -430,5 +453,24 @@ mod tests {
         let error = load(&dir.join("absent.toml")).unwrap_err();
         assert!(matches!(error, ConfigError::Io { .. }));
         assert!(error.to_string().contains("absent.toml"));
+    }
+
+    #[test]
+    fn a_non_loopback_listen_needs_tls() {
+        let error = Config::parse("[server]\nlisten = \"0.0.0.0:8080\"\n").unwrap_err();
+        assert_eq!(invalid_table(error), "[server]");
+        assert!(Config::parse("[server]\nlisten = \"[::1]:8080\"\n").is_ok());
+        let with_tls =
+            "[server]\nlisten = \"0.0.0.0:8443\"\n[tls]\ncert = \"c.pem\"\nkey = \"k.pem\"\n";
+        assert!(Config::parse(with_tls).is_ok());
+    }
+
+    #[test]
+    fn the_request_timeout_is_range_checked() {
+        for bad in ["0", "601", "99999"] {
+            let text = format!("[server]\nrequest_timeout_secs = {bad}\n");
+            assert!(Config::parse(&text).is_err(), "{bad}");
+        }
+        assert!(Config::parse("[server]\nrequest_timeout_secs = 600\n").is_ok());
     }
 }
