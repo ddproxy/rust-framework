@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag --draft
+
+  build:
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, musl: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, musl: true }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install musl toolchain
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.99 --profile minimal -t ${{ matrix.target }}
+          rustup default 1.99
+      - name: Build
+        run: cargo build --release --locked -p fw-app --features tui --target ${{ matrix.target }}
+        env:
+          CFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic
+      - name: Smoke-run the binary on hosts that can run it
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/fw-app"
+          case "$(uname -m)" in
+            x86_64) host=x86_64 ;;
+            arm64|aarch64) host=aarch64 ;;
+            *) host=unknown ;;
+          esac
+          case "${{ matrix.target }}" in
+            "$host"-*) ;;
+            *) echo "skipping: ${{ matrix.target }} cannot run on $host"; exit 0 ;;
+          esac
+          "$bin" --version
+          "$bin" check --config fw-app.toml
+      - name: Package
+        run: |
+          name="fw-app-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$name"
+          cp "target/${{ matrix.target }}/release/fw-app" LICENSE README.md "$name/"
+          tar czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fw-app-${{ matrix.target }}
+          path: |
+            fw-app-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            fw-app-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fw-app-*
+          merge-multiple: true
+          path: dist
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist/*
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
