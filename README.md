@@ -7,10 +7,10 @@ A small, working reference workspace for Rust services. Copy it to start a new p
 | Path | Purpose |
 |---|---|
 | `crates/fw-config` | TOML config: unknown keys refused, 64 KiB cap, errors name the table, TLS key mode check |
-| `crates/fw-auth` | Bearer tokens stored as SHA-256; constant-time match; per-address login throttle |
-| `crates/fw-serve` | HTTP(S) listener: global and per-address connection caps, header timeout, request ids, drain on SIGTERM and Ctrl-C |
+| `crates/fw-auth` | Bearer tokens stored as SHA-256; constant-time match; atomic per-address attempt throttle |
+| `crates/fw-serve` | HTTP(S) listener: connection caps, header timeout, request ids, drain on SIGTERM and Ctrl-C, certificate expiry check at load |
 | `crates/fw-tui` | Terminal dashboard: pure model and sanitizer, ratatui view, guard that restores the terminal; behind `tui` |
-| `app/` | `fw-app` binary wiring the above: `check`, `serve` (default), `top` (needs `tui`), `--version` |
+| `app/` | `fw-app` binary wiring the above: `check`, `serve` (default), `top` (needs `tui`), `--version`; log reopen on SIGHUP, panic hook, state-dir check |
 | `fw-app.toml` | Demo config; `fw-app check --config fw-app.toml` should print `ok: ...` |
 | `Makefile` | `build`, `install`, `uninstall`, `du`, `clean*` |
 | `.github/workflows/` | `ci.yml`: fmt, clippy with and without `tui`, tests, cargo-deny. `release.yml`: musl and macOS builds, checksums, draft release |
@@ -53,15 +53,17 @@ Make a token hash for the config with `printf '%s' "$TOKEN" | sha256sum`. Then c
 
 ## Behaviour worth knowing
 
-- The login throttle has no success reset. A caller who holds one valid token cannot clear the failure count between guesses at another, so a count only ends with its window.
+- Every request to a throttled route reserves one attempt under a single lock, valid token or not. There is no success reset: a caller holding a valid token cannot clear the count between guesses at another.
+- `[state] dir` is optional. When set it is created and probed with a temporary file at startup; an unwritable directory is a clear startup error.
+- A log file sink reopens its path on SIGHUP for rotation. Failed writes increment an atomic counter shown as `log_write_errors` in `/healthz`; a warning is emitted at most once a minute.
+- TLS certificates are parsed at load: an expired leaf is refused, one expiring within 30 days logs a warning, and `not_after` (unix seconds) appears in `fw-app check`, `/healthz` and the serve logs.
+- Panics are logged through `tracing` with their message and location; before logging starts the message also goes to stderr.
 - A request that overruns `request_timeout_secs` gets a 408. Body limits apply to extractors (the demo sets 64 KiB); a raw `Body` has none, so a handler that reads one must bound it.
 - A non-loopback `listen` needs `[tls]`; bearer tokens never travel in the clear off the host.
 - Names drawn in the terminal pass through `fw_tui::sanitize::printable`: control characters, bidi overrides and zero-width characters become `?`.
 
 ## Known gaps (for review)
 
-- The log file has no rotation and no reload; `logging` is a single-file append.
-- A TLS certificate's expiry is not checked at load.
 - Refused connections (over a cap) are logged at debug level, so a flood is invisible by default.
 - Idle keep-alive connections hold their slot until the drain timeout (10 s) during shutdown.
 - The release workflow runs only on `github.com` (its `if:` guard, copied from Reiki); a forge-hosted copy needs its own release step.

@@ -18,6 +18,10 @@ format = "text"
 stderr = true
 # file = "/var/log/fw-app.log"
 
+# Optional: created and checked for writability at startup. Omit when no state is persisted.
+# [state]
+# dir = "/var/lib/fw-app"
+
 [auth]
 throttle = true
 max_failures = 10

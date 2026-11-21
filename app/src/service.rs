@@ -1,10 +1,10 @@
-//! The demo HTTP service: a health route and one bearer-authenticated route. Replace the routes
-//! with your own; the listener, auth and request ids stay.
+//! The demo HTTP service: a status route (`/healthz`) and one bearer-authenticated route. Replace
+//! the routes with your own; the listener, auth and request ids stay.
 
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -21,6 +21,8 @@ pub struct AppState {
     tokens: TokenSet,
     /// `None` when `[auth] throttle = false`.
     throttle: Option<LoginThrottle>,
+    /// Leaf certificate expiry when TLS is configured.
+    tls_not_after: Option<SystemTime>,
 }
 
 impl AppState {
@@ -39,7 +41,11 @@ impl AppState {
                 window: Duration::from_secs(config.auth.window_secs),
             })
         });
-        Ok(Self { tokens, throttle })
+        Ok(Self {
+            tokens,
+            throttle,
+            tls_not_after: None,
+        })
     }
 }
 
@@ -53,8 +59,15 @@ pub fn router(state: Arc<AppState>) -> Router {
     with_request_ids(app)
 }
 
-async fn healthz() -> Response {
-    json_response(StatusCode::OK, &json!({ "status": "ok" }))
+async fn healthz(State(state): State<Arc<AppState>>) -> Response {
+    let mut status = json!({
+        "status": "ok",
+        "log_write_errors": crate::logging::write_errors(),
+    });
+    if let Some(not_after) = state.tls_not_after {
+        status["not_after"] = json!(fw_serve::unix_secs(not_after));
+    }
+    json_response(StatusCode::OK, &status)
 }
 
 /// JSON without axum's `json` feature, which Reiki does not enable.
@@ -71,13 +84,13 @@ async fn whoami(
     let ip = peer.ip();
     let now = Instant::now();
     if let Some(throttle) = &state.throttle {
-        if let Some(wait) = throttle.blocked(ip, now) {
-            let retry = wait.as_secs().max(1).to_string();
+        if let Err(retry) = throttle.try_attempt(ip, now) {
+            let after = retry.after.as_secs().max(1).to_string();
             tracing::warn!(%ip, "login throttled");
             return (
                 StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, retry)],
-                "too many failed attempts\n",
+                [(header::RETRY_AFTER, after)],
+                "too many attempts\n",
             )
                 .into_response();
         }
@@ -89,9 +102,6 @@ async fn whoami(
     match presented.and_then(|token| state.tokens.verify(token)) {
         Some(name) => json_response(StatusCode::OK, &json!({ "name": name })),
         None => {
-            if let Some(throttle) = &state.throttle {
-                throttle.fail(ip, now);
-            }
             tracing::warn!(%ip, "bearer token rejected");
             (
                 StatusCode::UNAUTHORIZED,
@@ -105,14 +115,16 @@ async fn whoami(
 
 /// Binds the listener and serves until a shutdown signal.
 pub async fn run(config: &Config, config_path: &Path) -> Result<(), String> {
-    let state = Arc::new(AppState::from_config(config)?);
+    let mut state = AppState::from_config(config)?;
     let tls = match &config.tls {
-        Some(tls) => Some(fw_serve::tls::load(
-            Path::new(&tls.cert),
-            Path::new(&tls.key),
-        )?),
+        Some(tls) => {
+            let info = fw_serve::tls::load_info(Path::new(&tls.cert), Path::new(&tls.key))?;
+            state.tls_not_after = Some(info.not_after);
+            Some(info.config)
+        }
         None => None,
     };
+    let state = Arc::new(state);
     let listener = TcpListener::bind(&config.server.listen)
         .await
         .map_err(|e| format!("cannot listen on {}: {e}", config.server.listen))?;
@@ -161,8 +173,8 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let options = ServeOptions {
-            max_connections: 16,
-            max_connections_per_addr: 8,
+            max_connections: 64,
+            max_connections_per_addr: 64,
             header_read_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         };
@@ -196,6 +208,23 @@ mod tests {
         let reply = send(addr, &format!("Authorization: Bearer {TOKEN}\r\n")).await;
         assert_eq!(status(&reply), 200, "{reply}");
         assert!(reply.ends_with(r#"{"name":"peer-a"}"#), "{reply}");
+        let _ = stop.send(());
+    }
+
+    #[tokio::test]
+    async fn healthz_reports_the_log_write_error_counter() {
+        let (addr, stop) = start(10).await;
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        stream.read_to_end(&mut out).await.unwrap();
+        let reply = String::from_utf8_lossy(&out);
+        assert_eq!(status(&reply), 200, "{reply}");
+        assert!(reply.contains("\"log_write_errors\":0"), "{reply}");
+        assert!(!reply.contains("not_after"), "{reply}");
         let _ = stop.send(());
     }
 
@@ -253,6 +282,30 @@ mod tests {
             blocked.to_ascii_lowercase().contains("retry-after:"),
             "{blocked}"
         );
+        let _ = stop.send(());
+    }
+
+    #[tokio::test]
+    async fn a_concurrent_burst_cannot_pass_the_throttle_before_failures_are_recorded() {
+        let (addr, stop) = start(4).await;
+        let mut tasks = Vec::new();
+        for _ in 0..32 {
+            let task = tokio::spawn(async move {
+                send(addr, "Authorization: Bearer wrong-wrong-wrong\r\n").await
+            });
+            tasks.push(task);
+        }
+        let mut allowed = 0;
+        let mut blocked = 0;
+        for task in tasks {
+            match status(&task.await.unwrap()) {
+                401 => allowed += 1,
+                429 => blocked += 1,
+                other => panic!("unexpected status {other}"),
+            }
+        }
+        assert_eq!(allowed, 4, "only the reserved attempts are checked");
+        assert_eq!(blocked, 28);
         let _ = stop.send(());
     }
 

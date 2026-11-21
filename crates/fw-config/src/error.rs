@@ -22,6 +22,10 @@ pub enum ConfigError {
         path: String,
         mode: u32,
     },
+    NotWritable {
+        path: String,
+        source: std::io::Error,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -37,6 +41,9 @@ impl fmt::Display for ConfigError {
                 f,
                 "{what} {path} has mode {mode:03o}; it must not be accessible to group or others (chmod 600)"
             ),
+            Self::NotWritable { path, source } => {
+                write!(f, "state directory {path} is not writable: {source}")
+            }
         }
     }
 }
@@ -44,7 +51,7 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io { source, .. } => Some(source),
+            Self::Io { source, .. } | Self::NotWritable { source, .. } => Some(source),
             _ => None,
         }
     }

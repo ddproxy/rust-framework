@@ -1,4 +1,7 @@
+//! Per-address attempt throttle. Checking the limit and reserving an attempt share one lock.
+
 use std::collections::HashMap;
+use std::fmt;
 use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -13,7 +16,20 @@ pub struct ThrottleSettings {
     pub window: Duration,
 }
 
-/// Counts failed token checks per address. A blocked address gets the time left in its window.
+/// How long an address must wait before it may try again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    pub after: Duration,
+}
+
+impl fmt::Display for Retry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "retry in {}s", self.after.as_secs())
+    }
+}
+
+/// Counts attempts per address. Checking the limit and reserving an attempt happen under one
+/// lock, so a concurrent burst cannot pass the check before the first failure is recorded.
 pub struct LoginThrottle {
     settings: ThrottleSettings,
     seen: Mutex<HashMap<IpAddr, (u32, Instant)>>,
@@ -43,20 +59,9 @@ impl LoginThrottle {
         }
     }
 
-    /// How long `ip` must wait, or `None` when it may try.
-    pub fn blocked(&self, ip: IpAddr, now: Instant) -> Option<Duration> {
-        let ip = throttle_key(ip);
-        let seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        let (count, since) = seen.get(&ip)?;
-        let elapsed = now.saturating_duration_since(*since);
-        if elapsed >= self.settings.window {
-            return None;
-        }
-        (*count >= self.settings.max_failures).then(|| self.settings.window - elapsed)
-    }
-
-    /// Records a failure and returns how many the address has inside the current window.
-    pub fn fail(&self, ip: IpAddr, now: Instant) -> u32 {
+    /// Reserves one attempt for `ip`, or returns the time left in its window when it is blocked.
+    /// A successful login still consumes an attempt: there is deliberately no success reset.
+    pub fn try_attempt(&self, ip: IpAddr, now: Instant) -> Result<(), Retry> {
         let ip = throttle_key(ip);
         let window = self.settings.window;
         let max = self.settings.max_failures;
@@ -75,14 +80,29 @@ impl LoginThrottle {
             }
         }
         let entry = seen.entry(ip).or_insert((0, now));
-        if now.saturating_duration_since(entry.1) >= window {
+        let elapsed = now.saturating_duration_since(entry.1);
+        if elapsed >= window {
             *entry = (0, now);
         }
+        if entry.0 >= max {
+            return Err(Retry {
+                after: window - now.saturating_duration_since(entry.1),
+            });
+        }
         entry.0 = entry.0.saturating_add(1);
-        entry.0
+        Ok(())
     }
 
     // There is deliberately no success reset: see the test of the same intent below.
+    #[cfg(test)]
+    fn count(&self, ip: IpAddr) -> Option<u32> {
+        self.seen
+            .lock()
+            .unwrap()
+            .get(&throttle_key(ip))
+            .map(|(count, _)| *count)
+    }
+
     #[cfg(test)]
     fn tracked(&self) -> usize {
         self.seen.lock().unwrap().len()
@@ -92,6 +112,8 @@ impl LoginThrottle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
 
     fn throttle() -> LoginThrottle {
         LoginThrottle::new(ThrottleSettings {
@@ -105,17 +127,16 @@ mod tests {
         let throttle = throttle();
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
         let t0 = Instant::now();
-        assert_eq!(throttle.fail(ip, t0), 1);
-        assert_eq!(throttle.fail(ip, t0), 2);
-        assert!(
-            throttle.blocked(ip, t0).is_none(),
-            "two failures are allowed"
+        for _ in 0..3 {
+            assert_eq!(throttle.try_attempt(ip, t0), Ok(()));
+        }
+        assert_eq!(throttle.count(ip), Some(3));
+        assert_eq!(
+            throttle.try_attempt(ip, t0 + Duration::from_secs(20)),
+            Err(Retry {
+                after: Duration::from_secs(40)
+            })
         );
-        assert_eq!(throttle.fail(ip, t0), 3);
-        let wait = throttle
-            .blocked(ip, t0 + Duration::from_secs(20))
-            .expect("blocked");
-        assert_eq!(wait, Duration::from_secs(40));
     }
 
     #[test]
@@ -124,38 +145,44 @@ mod tests {
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
         let t0 = Instant::now();
         for _ in 0..3 {
-            throttle.fail(ip, t0);
+            throttle.try_attempt(ip, t0).unwrap();
         }
-        assert!(throttle.blocked(ip, t0 + Duration::from_secs(60)).is_none());
-        assert_eq!(
-            throttle.fail(ip, t0 + Duration::from_secs(61)),
-            1,
-            "the count restarts"
-        );
+        let later = t0 + Duration::from_secs(60);
+        assert_eq!(throttle.try_attempt(ip, later), Ok(()));
+        assert_eq!(throttle.count(ip), Some(1), "the count restarts");
     }
 
     #[test]
-    fn the_count_is_never_cleared_by_another_login_only_by_its_window() {
+    fn a_block_lasts_its_full_window_with_no_success_reset() {
         // A caller holding one valid credential must not be able to reset the count between
         // guesses at another, so the throttle has no success reset.
         let throttle = throttle();
         let ip: IpAddr = "192.0.2.7".parse().unwrap();
         let t0 = Instant::now();
         for _ in 0..10 {
-            throttle.fail(ip, t0);
+            let _ = throttle.try_attempt(ip, t0);
         }
-        assert!(throttle.blocked(ip, t0).is_some());
-        assert!(throttle.blocked(ip, t0 + Duration::from_secs(30)).is_some());
-        assert!(throttle.blocked(ip, t0 + Duration::from_secs(61)).is_none());
+        assert!(throttle.try_attempt(ip, t0).is_err());
+        assert!(throttle
+            .try_attempt(ip, t0 + Duration::from_secs(30))
+            .is_err());
+        assert!(throttle
+            .try_attempt(ip, t0 + Duration::from_secs(61))
+            .is_ok());
     }
 
     #[test]
     fn a_count_at_the_maximum_saturates_instead_of_overflowing() {
-        let throttle = throttle();
+        let throttle = LoginThrottle::new(ThrottleSettings {
+            max_failures: u32::MAX,
+            window: Duration::from_secs(60),
+        });
         let ip: IpAddr = "192.0.2.8".parse().unwrap();
         let t0 = Instant::now();
-        throttle.seen.lock().unwrap().insert(ip, (u32::MAX, t0));
-        assert_eq!(throttle.fail(ip, t0), u32::MAX);
+        throttle.seen.lock().unwrap().insert(ip, (u32::MAX - 1, t0));
+        assert_eq!(throttle.try_attempt(ip, t0), Ok(()));
+        assert_eq!(throttle.count(ip), Some(u32::MAX));
+        assert!(throttle.try_attempt(ip, t0).is_err());
     }
 
     #[test]
@@ -166,14 +193,14 @@ mod tests {
         let same_prefix: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
         let other: IpAddr = "192.0.2.1".parse().unwrap();
         for _ in 0..2 {
-            throttle.fail(a, t0);
+            throttle.try_attempt(a, t0).unwrap();
         }
-        throttle.fail(same_prefix, t0);
+        throttle.try_attempt(same_prefix, t0).unwrap();
         assert!(
-            throttle.blocked(a, t0).is_some(),
+            throttle.try_attempt(a, t0).is_err(),
             "the /64 shares one count"
         );
-        assert!(throttle.blocked(other, t0).is_none());
+        assert_eq!(throttle.try_attempt(other, t0), Ok(()));
     }
 
     #[test]
@@ -182,8 +209,37 @@ mod tests {
         let t0 = Instant::now();
         for i in 0..(MAX_TRACKED as u32 + 500) {
             let ip = IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000 + i));
-            throttle.fail(ip, t0);
+            throttle.try_attempt(ip, t0).unwrap();
         }
         assert_eq!(throttle.tracked(), MAX_TRACKED);
+    }
+
+    #[test]
+    fn concurrent_attempts_reserve_the_limit_exactly_once_each() {
+        const THREADS: usize = 32;
+        const ATTEMPTS: usize = 32;
+        const MAX: usize = 20;
+        let throttle = LoginThrottle::new(ThrottleSettings {
+            max_failures: MAX as u32,
+            window: Duration::from_secs(60),
+        });
+        let ip: IpAddr = "192.0.2.9".parse().unwrap();
+        let now = Instant::now();
+        let barrier = Barrier::new(THREADS);
+        let allowed = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    barrier.wait();
+                    for _ in 0..ATTEMPTS {
+                        if throttle.try_attempt(ip, now).is_ok() {
+                            allowed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(allowed.load(Ordering::Relaxed), MAX);
+        assert_eq!(throttle.count(ip), Some(MAX as u32));
     }
 }

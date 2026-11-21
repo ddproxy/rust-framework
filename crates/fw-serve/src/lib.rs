@@ -1,9 +1,11 @@
 //! HTTP(S) listener. The accept loop caps connections globally and per remote address, times out
-//! a client that never finishes its headers, and drains in-flight connections on shutdown.
+//! a client that never finishes its headers, and drains in-flight connections on shutdown. TLS
+//! certificates are checked for expiry at load.
 
 mod limit;
 mod request_id;
 mod shutdown;
+mod time;
 pub mod tls;
 
 use std::future::Future;
@@ -22,6 +24,7 @@ use tower_service::Service;
 
 pub use request_id::{with_request_ids, X_REQUEST_ID};
 pub use shutdown::shutdown_signal;
+pub use time::{from_unix_secs, remaining, unix_secs};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);

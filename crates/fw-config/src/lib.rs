@@ -1,9 +1,11 @@
 //! Service config. Unknown keys are refused, the file is size-capped, every validation error
-//! names its table, and a TLS key other users can read is refused.
+//! names its table, and a TLS key other users can read is refused. An optional state directory is
+//! checked for writability at startup.
 
 mod error;
 mod secret;
 
+use std::fs::OpenOptions;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -12,6 +14,13 @@ use serde::Deserialize;
 
 pub use error::ConfigError;
 pub use secret::check_private_file;
+
+/// Where the service may write state. `None` means no state is persisted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StateConfig {
+    pub dir: Option<String>,
+}
 
 /// A config is a few KiB. The cap stops a runaway or hostile file from being read whole.
 pub const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -28,6 +37,8 @@ pub struct Config {
     pub log: LogConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub state: StateConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -131,7 +142,15 @@ impl Config {
         self.validate_server()?;
         self.validate_tls()?;
         self.validate_log()?;
-        self.validate_auth()
+        self.validate_auth()?;
+        self.validate_state()
+    }
+
+    fn validate_state(&self) -> Result<(), ConfigError> {
+        if self.state.dir.as_deref() == Some("") {
+            return invalid("[state]", "dir must not be empty".to_owned());
+        }
+        Ok(())
     }
 
     fn validate_server(&self) -> Result<(), ConfigError> {
@@ -319,6 +338,26 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// Creates `path` if needed and proves it writable with a temporary probe file, which is removed
+/// before returning. The error names the path so an operator can fix permissions or the mount.
+pub fn check_state_dir(path: &Path) -> Result<(), ConfigError> {
+    let shown = path.display().to_string();
+    let writable = |source| ConfigError::NotWritable {
+        path: shown.clone(),
+        source,
+    };
+    std::fs::create_dir_all(path).map_err(writable)?;
+    let probe = path.join(format!(".fw-state-probe-{}", std::process::id()));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(writable)?;
+    drop(file);
+    std::fs::remove_file(&probe).map_err(writable)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +502,37 @@ mod tests {
         let with_tls =
             "[server]\nlisten = \"0.0.0.0:8443\"\n[tls]\ncert = \"c.pem\"\nkey = \"k.pem\"\n";
         assert!(Config::parse(with_tls).is_ok());
+    }
+
+    #[test]
+    fn an_empty_state_dir_is_refused() {
+        let error = Config::parse("[state]\ndir = \"\"\n").unwrap_err();
+        assert_eq!(invalid_table(error), "[state]");
+        assert!(Config::parse("[state]\ndir = \"./state\"\n").is_ok());
+        assert!(Config::parse("[state]\nunknown = 1\n").is_err());
+    }
+
+    #[test]
+    fn a_state_dir_is_created_and_probed_without_leaving_a_file() {
+        let dir = scratch("state").join("nested").join("state");
+        check_state_dir(&dir).unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the probe is removed"
+        );
+    }
+
+    #[test]
+    fn a_file_cannot_be_used_as_a_state_dir() {
+        let dir = scratch("state-file");
+        let file = dir.join("not-a-dir");
+        std::fs::write(&file, "keep").unwrap();
+        let error = check_state_dir(&file).unwrap_err();
+        assert!(matches!(error, ConfigError::NotWritable { .. }));
+        assert!(error.to_string().contains("not-a-dir"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep");
     }
 
     #[test]

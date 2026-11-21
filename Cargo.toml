@@ -29,6 +29,8 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm",
 crossterm = "0.29"
 libc = "0.2"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+x509-parser = "0.18"
+time = { version = "0.3", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,5 +1,5 @@
 //! Bearer-token checks. Only SHA-256 hashes of tokens are stored. A presented token is hashed and
-//! compared against every configured hash, and failures are throttled per address.
+//! compared against every configured hash, and attempts are throttled per address.
 
 mod throttle;
 
@@ -7,7 +7,7 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-pub use throttle::{LoginThrottle, ThrottleSettings};
+pub use throttle::{LoginThrottle, Retry, ThrottleSettings};
 
 /// Lowercase hex SHA-256 of `input`.
 pub fn sha256_hex(input: &str) -> String {
