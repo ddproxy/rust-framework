@@ -1,16 +1,22 @@
 [advisories]
 version = 2
+yanked = "deny"
 
 [licenses]
 version = 2
+# The list is shared with dependency-review-action; allowances unused here stay allowed.
+unused-allowed-license = "allow"
 allow = [
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
     "ISC",
     "Unicode-3.0",
     "Unlicense",
+    "Zlib",
 ]
 
 [bans]
@@ -26,3 +32,9 @@ skip = [
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No git dependencies today; the org entry is the policy for future ones.
+unused-allowed-org = "allow"
+
+[sources.allow-org]
+github = ["ddproxy"]
