@@ -11,7 +11,7 @@ The workflows in `.github/workflows/` run these checks. Required status-check na
 | `scorecard.yml` | Pushes to `main`, weekly | OpenSSF Scorecard, published to the Scorecard API and uploaded as SARIF | Security tab → Code scanning, Scorecard viewer, Actions tab (results artifact, 5 days) |
 | `release.yml` | `v*` tags | Builds the archives, attaches checksums and a CycloneDX JSON SBOM, and creates build provenance attestations | Releases page (assets), Actions tab and `gh attestation verify` (provenance) |
 
-The license allow list is defined in `deny.toml` and repeated as `allow-licenses` in `dependency-review.yml`; change both together. `scripts/validate-workflows.sh` checks that they match, that all workflow YAML parses, that every `uses:` is pinned to a 40-character SHA with a version comment, and that job permissions stay within the sets the script declares.
+The license allow list is defined in `deny.toml` and repeated as `allow-licenses` in `dependency-review.yml`; change both together. `scripts/validate-workflows.sh` checks that they match, that all workflow YAML parses, that every `uses:` is pinned to a 40-character SHA with a version comment, and that job permissions stay within the sets the script declares. `make check` runs the local gates: fmt, clippy and tests with and without `tui`, and a doc build with warnings denied.
 
 ## Verify a release
 

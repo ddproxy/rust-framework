@@ -61,6 +61,24 @@ impl LoginThrottle {
 
     /// Reserves one attempt for `ip`, or returns the time left in its window when it is blocked.
     /// A successful login still consumes an attempt: there is deliberately no success reset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::IpAddr;
+    /// use std::time::{Duration, Instant};
+    /// use fw_auth::{LoginThrottle, ThrottleSettings};
+    ///
+    /// let throttle = LoginThrottle::new(ThrottleSettings {
+    ///     max_failures: 2,
+    ///     window: Duration::from_secs(60),
+    /// });
+    /// let ip: IpAddr = "192.0.2.1".parse().unwrap();
+    /// let now = Instant::now();
+    /// assert_eq!(throttle.try_attempt(ip, now), Ok(()));
+    /// assert_eq!(throttle.try_attempt(ip, now), Ok(()));
+    /// assert!(throttle.try_attempt(ip, now).is_err());
+    /// ```
     pub fn try_attempt(&self, ip: IpAddr, now: Instant) -> Result<(), Retry> {
         let ip = throttle_key(ip);
         let window = self.settings.window;
@@ -86,7 +104,7 @@ impl LoginThrottle {
         }
         if entry.0 >= max {
             return Err(Retry {
-                after: window - now.saturating_duration_since(entry.1),
+                after: window.saturating_sub(now.saturating_duration_since(entry.1)),
             });
         }
         entry.0 = entry.0.saturating_add(1);
@@ -241,5 +259,49 @@ mod tests {
         });
         assert_eq!(allowed.load(Ordering::Relaxed), MAX);
         assert_eq!(throttle.count(ip), Some(MAX as u32));
+    }
+
+    #[test]
+    fn a_zero_window_and_zero_limit_are_reported_without_panicking() {
+        let ip: IpAddr = "192.0.2.20".parse().unwrap();
+        let now = Instant::now();
+
+        let none = LoginThrottle::new(ThrottleSettings {
+            max_failures: 0,
+            window: Duration::ZERO,
+        });
+        assert_eq!(
+            none.try_attempt(ip, now),
+            Err(Retry {
+                after: Duration::ZERO
+            })
+        );
+
+        let resetting = LoginThrottle::new(ThrottleSettings {
+            max_failures: 1,
+            window: Duration::ZERO,
+        });
+        for _ in 0..3 {
+            assert_eq!(resetting.try_attempt(ip, now), Ok(()));
+        }
+    }
+
+    #[test]
+    fn time_moving_backwards_does_not_extend_or_overflow_the_block() {
+        let throttle = throttle();
+        let ip: IpAddr = "192.0.2.21".parse().unwrap();
+        let t0 = Instant::now();
+        for _ in 0..3 {
+            throttle.try_attempt(ip, t0).unwrap();
+        }
+        // A clock that appears to jump backwards only shortens the remaining wait.
+        let earlier = t0.checked_sub(Duration::from_secs(30)).unwrap_or(t0);
+        match throttle.try_attempt(ip, earlier) {
+            Err(Retry { after }) => assert!(after <= Duration::from_secs(60), "{after:?}"),
+            other => panic!("expected the address to stay blocked, got {other:?}"),
+        }
+        assert!(throttle
+            .try_attempt(ip, t0 + Duration::from_secs(60))
+            .is_ok());
     }
 }

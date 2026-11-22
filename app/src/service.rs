@@ -49,6 +49,14 @@ impl AppState {
     }
 }
 
+/// The certificate expiry as it appears in `check`, `/healthz` and the serve log.
+fn not_after_text(state: &AppState) -> String {
+    state
+        .tls_not_after
+        .map(fw_serve::unix_secs)
+        .map_or_else(|| "none".to_owned(), |secs| secs.to_string())
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -124,6 +132,7 @@ pub async fn run(config: &Config, config_path: &Path) -> Result<(), String> {
         }
         None => None,
     };
+    let not_after = not_after_text(&state);
     let state = Arc::new(state);
     let listener = TcpListener::bind(&config.server.listen)
         .await
@@ -132,6 +141,7 @@ pub async fn run(config: &Config, config_path: &Path) -> Result<(), String> {
     tracing::info!(
         %addr,
         tls = tls.is_some(),
+        not_after = %not_after,
         config = %config_path.display(),
         "listening"
     );
@@ -322,5 +332,13 @@ mod tests {
             ..Config::default()
         };
         assert!(AppState::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn the_serve_log_reports_the_certificate_expiry_when_tls_is_on() {
+        let mut state = AppState::from_config(&Config::default()).unwrap();
+        assert_eq!(not_after_text(&state), "none");
+        state.tls_not_after = Some(std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000));
+        assert_eq!(not_after_text(&state), "1800000000");
     }
 }

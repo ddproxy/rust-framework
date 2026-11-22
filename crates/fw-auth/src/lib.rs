@@ -1,5 +1,17 @@
 //! Bearer-token checks. Only SHA-256 hashes of tokens are stored. A presented token is hashed and
 //! compared against every configured hash, and attempts are throttled per address.
+//!
+//! # Examples
+//!
+//! ```
+//! use fw_auth::{bearer_token, sha256_hex, TokenSet};
+//!
+//! let hash = sha256_hex("example value");
+//! let tokens = TokenSet::new([("peer-a".to_owned(), hash)]).unwrap();
+//! assert_eq!(tokens.verify("example value"), Some("peer-a"));
+//! assert_eq!(bearer_token("Bearer abc123"), Some("abc123"));
+//! assert!(bearer_token("Basic abc123").is_none());
+//! ```
 
 mod throttle;
 
@@ -10,6 +22,15 @@ use sha2::{Digest, Sha256};
 pub use throttle::{LoginThrottle, Retry, ThrottleSettings};
 
 /// Lowercase hex SHA-256 of `input`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     fw_auth::sha256_hex("abc"),
+///     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+/// );
+/// ```
 pub fn sha256_hex(input: &str) -> String {
     Sha256::digest(input.as_bytes())
         .iter()
@@ -29,6 +50,13 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// The token in an `Authorization` value: `Bearer <token>`, with a case-insensitive scheme.
 /// Returns `None` for any other scheme and for a token that is empty or holds anything but
 /// visible ASCII, so a header with control characters or spaces never reaches the hash.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(fw_auth::bearer_token("bearer  abc123  "), Some("abc123"));
+/// assert_eq!(fw_auth::bearer_token("Bearer"), None);
+/// ```
 pub fn bearer_token(value: &str) -> Option<&str> {
     let (scheme, rest) = value
         .trim_ascii()
@@ -64,7 +92,19 @@ pub struct TokenSet {
 }
 
 impl TokenSet {
-    /// Builds a set from `(name, sha256 hex)` pairs.
+    /// Builds a set from `(name, sha256 hex)` pairs. Every hash must be 64 lowercase hex
+    /// characters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fw_auth::{sha256_hex, TokenSet};
+    ///
+    /// let hash = sha256_hex("example value");
+    /// let tokens = TokenSet::new([("peer-a".to_owned(), hash)]).unwrap();
+    /// assert_eq!(tokens.verify("example value"), Some("peer-a"));
+    /// assert!(TokenSet::new([("bad".to_owned(), "abc".to_owned())]).is_err());
+    /// ```
     pub fn new<I>(entries: I) -> Result<Self, TokenSetError>
     where
         I: IntoIterator<Item = (String, String)>,
@@ -195,6 +235,55 @@ mod tests {
         assert!(constant_time_eq(b"abcd", b"abcd"));
         assert!(!constant_time_eq(b"abcd", b"abce"));
         assert!(!constant_time_eq(b"abcd", b"abc"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn empty_and_very_long_inputs_hash_without_panicking() {
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let huge = "x".repeat(1024 * 1024);
+        let hash = sha256_hex(&huge);
+        assert_eq!(hash.len(), 64);
+        assert_ne!(hash, sha256_hex("x"));
+        assert_eq!(
+            bearer_token(&format!("Bearer {huge}")).map(str::len),
+            Some(huge.len())
+        );
+    }
+
+    #[test]
+    fn token_set_rejects_every_malformed_hash_shape() {
+        let empty = TokenSet::new([]).unwrap();
+        assert_eq!(empty.verify("anything"), None);
+
+        let good = sha256_hex("example value");
+        for bad in [
+            String::new(),
+            "abc".to_owned(),
+            good.to_uppercase(),
+            format!("{good}0"),
+            format!("z{}", &good[1..]),
+            format!("{good}\u{e9}"),
+        ] {
+            assert_eq!(
+                TokenSet::new([("bad".to_owned(), bad.clone())]).unwrap_err(),
+                TokenSetError::BadHash("bad".to_owned()),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_handles_large_and_empty_inputs() {
+        let large = vec![0x5a; 16 * 1024];
+        let mut different = large.clone();
+        different[large.len() - 1] = 0x5b;
+        assert!(constant_time_eq(&large, &large));
+        assert!(!constant_time_eq(&large, &different));
+        assert!(!constant_time_eq(&large, &large[..large.len() - 1]));
         assert!(constant_time_eq(b"", b""));
     }
 }
