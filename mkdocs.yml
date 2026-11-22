@@ -1,0 +1,5 @@
+site_name: rust-framework
+
+nav:
+  - Home: index.md
+  - Security scanning: security-scanning.md

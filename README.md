@@ -1,5 +1,11 @@
 # rust-framework
 
+[![ci](https://github.com/ddproxy/rust-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/ddproxy/rust-framework/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ddproxy/rust-framework/actions/workflows/codeql.yml/badge.svg)](https://github.com/ddproxy/rust-framework/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ddproxy/rust-framework/badge)](https://scorecard.dev/viewer/?uri=github.com/ddproxy/rust-framework)
+[![Latest release](https://img.shields.io/github/v/release/ddproxy/rust-framework)](https://github.com/ddproxy/rust-framework/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/ddproxy/rust-framework)](LICENSE)
+
 A small, working reference workspace for Rust services. Copy it to start a new project; it is not a dependency. It builds and tests as shipped, and each piece is a generic version of something from Reiki, with the proxy-specific parts removed.
 
 ## What is here
@@ -13,8 +19,10 @@ A small, working reference workspace for Rust services. Copy it to start a new p
 | `app/` | `fw-app` binary wiring the above: `check`, `serve` (default), `top` (needs `tui`), `--version`; log reopen on SIGHUP, panic hook, state-dir check |
 | `fw-app.toml` | Demo config; `fw-app check --config fw-app.toml` should print `ok: ...` |
 | `Makefile` | `build`, `install`, `uninstall`, `du`, `clean*` |
-| `.github/workflows/` | `ci.yml`: fmt, clippy with and without `tui`, tests, cargo-deny. `release.yml`: musl and macOS builds, checksums, draft release |
-| `deny.toml` | cargo-deny license and source policy |
+| `.github/workflows/` | `ci.yml` (fmt, clippy, tests), `audit.yml` (cargo-deny), `codeql.yml`, `scorecard.yml`, `dependency-review.yml`, `release.yml` (builds, checksums, SBOM, provenance) |
+| `deny.toml` | cargo-deny advisory, license and source policy |
+| `docs/` | Documentation index and [security scanning](docs/security-scanning.md) |
+| `SECURITY.md` | Private reporting, supported versions, response times |
 
 ### Where each piece came from
 
@@ -70,6 +78,22 @@ Make a token hash for the config with `printf '%s' "$TOKEN" | sha256sum`. Then c
 - Token length is not enforced at config time, because a hash cannot show how long its source was.
 - The `top` dashboard shows synthetic data; there is no real feed.
 - The CI workflow keeps Reiki's `curl | sh` rustup fallback for runners without Rust; drop it if every runner you use has Rust.
+
+## Security
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). [Security scanning](docs/security-scanning.md) lists the workflows, their required check names and where findings appear.
+
+### Verify a release
+
+```sh
+tag=v0.1.0
+target=x86_64-unknown-linux-musl
+gh release download "$tag" --repo ddproxy/rust-framework --pattern '*'
+gh attestation verify "fw-app-$tag-$target.tar.gz" --repo ddproxy/rust-framework
+shasum -a 256 -c SHA256SUMS
+```
+
+The release also carries a CycloneDX SBOM, `rust-framework-$tag.cdx.json`, and a `.sha256` file per archive.
 
 ## License
 

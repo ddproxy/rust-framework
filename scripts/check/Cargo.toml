@@ -1,0 +1,11 @@
+[package]
+name = "check-workflows"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+serde_yaml = "=0.9.34"
+toml = "=0.8.23"
