@@ -1,6 +1,13 @@
 /// Makes a string from the network safe to draw: control characters, bidi overrides and
 /// invisible format characters (zero-width marks, the byte-order mark) become `?`, so a peer's
 /// name cannot move the cursor, recolour the screen, or reorder or hide the text around it.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(fw_tui::sanitize::printable("peer\u{202e}-a"), "peer?-a");
+/// assert_eq!(fw_tui::sanitize::printable("plain"), "plain");
+/// ```
 pub fn printable(text: &str) -> String {
     text.chars()
         .map(|c| {

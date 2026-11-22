@@ -1,4 +1,4 @@
-.PHONY: help build install uninstall du clean clean-debug clean-release clean-stale
+.PHONY: help build check install uninstall du clean clean-debug clean-release clean-stale
 
 # root installs to /usr/local, anyone else to ~/.local; override with PREFIX=
 PREFIX ?= $(if $(filter 0,$(shell id -u)),/usr/local,$(HOME)/.local)
@@ -11,6 +11,14 @@ help:  ## list targets
 
 build:  ## release build of fw-app with the tui feature
 	cargo build --release --locked -p fw-app --features tui
+
+check:  ## fmt, clippy, tests (with and without tui) and warnings-denied docs
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo clippy --workspace --all-targets --locked --features tui -- -D warnings
+	cargo test --locked --workspace
+	cargo test --locked --workspace --features tui
+	RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 
 install: build  ## build and install fw-app into PREFIX/bin (~/.local, or /usr/local as root; PREFIX= and DESTDIR= override)
 	install -d '$(DESTDIR)$(BINDIR)'

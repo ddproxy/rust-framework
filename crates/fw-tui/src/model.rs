@@ -13,6 +13,18 @@ pub struct Row {
 
 /// Live rows keep moving. Pausing keeps a copy of them and the moment it was taken, and the view
 /// shows that copy with its age. A paused screen therefore never looks live.
+///
+/// # Examples
+///
+/// ```
+/// use fw_tui::model::Dashboard;
+///
+/// let mut dashboard = Dashboard::new(&["peer-a"]);
+/// dashboard.tick();
+/// let view = dashboard.view(std::time::Instant::now());
+/// assert!(view.plain_text().contains("peer-a"));
+/// assert!(!view.paused);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Dashboard {
     live: Vec<Row>,
@@ -44,9 +56,9 @@ impl Dashboard {
                 .seed
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            row.count += (self.seed >> 33) % 4;
+            row.count = row.count.saturating_add((self.seed >> 33) % 4);
         }
-        self.ticks += 1;
+        self.ticks = self.ticks.saturating_add(1);
     }
 
     pub fn paused(&self) -> bool {
@@ -165,5 +177,42 @@ mod tests {
         let view = Dashboard::new(&[]).view(Instant::now());
         assert!(view.rows.is_empty());
         assert!(view.plain_text().contains("q quit"));
+    }
+
+    #[test]
+    fn counters_saturate_at_their_maximum_without_panicking() {
+        // Advance to a step whose demo increment is nonzero, so the old `+=` would overflow.
+        let mut dashboard = Dashboard::new(&["peer-a"]);
+        let mut seed = dashboard.seed;
+        let mut steps = 0;
+        loop {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            steps += 1;
+            if !(seed >> 33).is_multiple_of(4) {
+                break;
+            }
+        }
+        for _ in 0..steps - 1 {
+            dashboard.tick();
+        }
+        dashboard.live[0].count = u64::MAX;
+        dashboard.ticks = u64::MAX;
+        dashboard.tick();
+        assert_eq!(dashboard.live[0].count, u64::MAX);
+        assert_eq!(dashboard.ticks, u64::MAX);
+    }
+
+    #[test]
+    fn many_ticks_keep_view_formatting_stable() {
+        let mut dashboard = Dashboard::new(&["peer-a", "peer-b"]);
+        for _ in 0..10_000 {
+            dashboard.tick();
+        }
+        let view = dashboard.view(Instant::now());
+        assert_eq!(view.rows.len(), 2);
+        assert!(view.status.starts_with("live, update 10000"));
+        assert!(view.rows.iter().all(|row| row.len() == 27));
     }
 }

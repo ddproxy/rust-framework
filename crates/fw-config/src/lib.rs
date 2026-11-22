@@ -131,7 +131,18 @@ pub struct TokenEntry {
 }
 
 impl Config {
-    /// Parses and validates config text. Does not touch the filesystem.
+    /// Parses and validates config text. Does not touch the filesystem. Unknown keys are refused
+    /// at every level.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use fw_config::Config;
+    ///
+    /// let config = Config::parse("[server]\nrequest_timeout_secs = 30\n").unwrap();
+    /// assert_eq!(config.server.request_timeout_secs, 30);
+    /// assert!(Config::parse("[server]\nunknown_key = 1\n").is_err());
+    /// ```
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let config: Self = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
         config.validate()?;
@@ -155,15 +166,18 @@ impl Config {
 
     fn validate_server(&self) -> Result<(), ConfigError> {
         let server = &self.server;
-        if server.listen.parse::<SocketAddr>().is_err() {
-            return invalid(
-                "[server]",
-                format!(
-                    "listen must be a socket address like 127.0.0.1:8080 (got {:?})",
-                    server.listen
-                ),
-            );
-        }
+        let listen: SocketAddr = match server.listen.parse() {
+            Ok(listen) => listen,
+            Err(_) => {
+                return invalid(
+                    "[server]",
+                    format!(
+                        "listen must be a socket address like 127.0.0.1:8080 (got {:?})",
+                        server.listen
+                    ),
+                )
+            }
+        };
         if !(1..=100_000).contains(&server.max_connections) {
             return invalid(
                 "[server]",
@@ -201,7 +215,6 @@ impl Config {
             );
         }
         // Bearer tokens travel in the clear without TLS, so only loopback may go without it.
-        let listen: SocketAddr = server.listen.parse().expect("checked above");
         if self.tls.is_none() && !listen.ip().is_loopback() {
             return invalid(
                 "[server]",
@@ -325,7 +338,7 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
             path: shown.clone(),
             source,
         })?;
-    if text.len() as u64 > MAX_CONFIG_BYTES {
+    if u64::try_from(text.len()).unwrap_or(u64::MAX) > MAX_CONFIG_BYTES {
         return Err(ConfigError::TooLarge {
             path: shown,
             limit: MAX_CONFIG_BYTES,
@@ -460,6 +473,54 @@ mod tests {
         let path = dir.join("big.toml");
         std::fs::write(&path, "#".repeat(MAX_CONFIG_BYTES as usize + 1)).unwrap();
         assert!(matches!(load(&path), Err(ConfigError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn a_file_exactly_at_the_size_cap_is_accepted() {
+        let dir = scratch("size-limit");
+        let path = dir.join("exact.toml");
+        // A line of comments is valid TOML and yields the defaults.
+        std::fs::write(&path, "#".repeat(MAX_CONFIG_BYTES as usize)).unwrap();
+        assert_eq!(load(&path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn malformed_and_very_large_inputs_are_reported_not_panics() {
+        assert_eq!(Config::parse("").unwrap(), Config::default());
+        let error = Config::parse("[server]\nlisten = \"not an address\"\n").unwrap_err();
+        assert_eq!(invalid_table(error), "[server]");
+
+        let huge_comment = format!("# {}\n", "padding".repeat(128 * 1024));
+        assert_eq!(Config::parse(&huge_comment).unwrap(), Config::default());
+        let huge_key = format!("[server]\n{} = 1\n", "k".repeat(128 * 1024));
+        assert!(
+            Config::parse(&huge_key).is_err(),
+            "an unknown key stays an error"
+        );
+    }
+
+    #[test]
+    fn integers_outside_their_field_type_are_parse_errors() {
+        let huge = u128::MAX.to_string();
+        for field in [
+            "max_connections",
+            "max_connections_per_addr",
+            "header_read_timeout_secs",
+            "request_timeout_secs",
+        ] {
+            let text = format!("[server]\n{field} = {huge}\n");
+            assert!(
+                matches!(Config::parse(&text), Err(ConfigError::Parse(_))),
+                "{field} should be refused as a parse error"
+            );
+        }
+        let text = format!("[auth]\nmax_failures = {}\n", u64::from(u32::MAX) + 1);
+        assert!(matches!(Config::parse(&text), Err(ConfigError::Parse(_))));
+
+        // A value that fits the TOML integer type but not the allowed range is an
+        // invalid-value error naming the table.
+        let text = "[server]\nmax_connections = 100001\n";
+        assert_eq!(invalid_table(Config::parse(text).unwrap_err()), "[server]");
     }
 
     #[test]

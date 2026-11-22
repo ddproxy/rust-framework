@@ -28,6 +28,17 @@ pub enum Expiry {
 }
 
 /// Classifies `not_after` relative to `now`, saturating when the deadline has passed.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::{Duration, SystemTime};
+/// use fw_serve::tls::{expiry, Expiry, WARN_BEFORE};
+///
+/// let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+/// assert_eq!(expiry(now, now), Expiry::Expired);
+/// assert_eq!(expiry(now + WARN_BEFORE, now), Expiry::Valid);
+/// ```
 pub fn expiry(not_after: SystemTime, now: SystemTime) -> Expiry {
     let left = crate::time::remaining(not_after, now);
     if left.is_zero() {

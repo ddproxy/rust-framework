@@ -24,11 +24,18 @@ impl AddrLimit {
 
     pub fn acquire(self: &Arc<Self>, ip: IpAddr) -> Option<AddrSlot> {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-        let count = active.entry(ip).or_insert(0);
-        if *count >= self.limit {
-            return None;
+        match active.get_mut(&ip) {
+            Some(count) if *count >= self.limit => return None,
+            Some(count) => *count = count.saturating_add(1),
+            None => {
+                // Do not leave a zero-count entry behind for an address we refuse: a flood of
+                // new addresses must not grow the table.
+                if self.limit == 0 {
+                    return None;
+                }
+                active.insert(ip, 1);
+            }
         }
-        *count += 1;
         Some(AddrSlot {
             limit: Arc::clone(self),
             ip,
@@ -76,5 +83,28 @@ mod tests {
             .expect("a closed connection frees its slot");
         drop((first, again, other));
         assert_eq!(limit.tracked(), 0, "entries are removed at zero");
+    }
+
+    #[test]
+    fn a_zero_limit_refuses_every_address_without_growing_the_table() {
+        let limit = AddrLimit::new(0);
+        let ip: IpAddr = "192.0.2.3".parse().unwrap();
+        for _ in 0..3 {
+            assert!(limit.acquire(ip).is_none());
+        }
+        for i in 0..1000u32 {
+            let other = IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000 + i));
+            assert!(limit.acquire(other).is_none());
+        }
+        assert_eq!(limit.tracked(), 0, "refused addresses keep no state");
+    }
+
+    #[test]
+    fn the_largest_limit_still_accepts_a_connection() {
+        let limit = AddrLimit::new(usize::MAX);
+        let ip: IpAddr = "192.0.2.4".parse().unwrap();
+        let slot = limit.acquire(ip).expect("one slot");
+        drop(slot);
+        assert_eq!(limit.tracked(), 0);
     }
 }

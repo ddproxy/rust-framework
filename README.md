@@ -18,7 +18,7 @@ A small, working reference workspace for Rust services. Copy it to start a new p
 | `crates/fw-tui` | Terminal dashboard: pure model and sanitizer, ratatui view, guard that restores the terminal; behind `tui` |
 | `app/` | `fw-app` binary wiring the above: `check`, `serve` (default), `top` (needs `tui`), `--version`; log reopen on SIGHUP, panic hook, state-dir check |
 | `fw-app.toml` | Demo config; `fw-app check --config fw-app.toml` should print `ok: ...` |
-| `Makefile` | `build`, `install`, `uninstall`, `du`, `clean*` |
+| `Makefile` | `check` (fmt, clippy, tests and warnings-denied docs), `build`, `install`, `uninstall`, `du`, `clean*` |
 | `.github/workflows/` | `ci.yml` (fmt, clippy, tests), `audit.yml` (cargo-deny), `codeql.yml`, `scorecard.yml`, `dependency-review.yml`, `release.yml` (builds, checksums, SBOM, provenance) |
 | `deny.toml` | cargo-deny advisory, license and source policy |
 | `docs/` | Documentation index and [security scanning](docs/security-scanning.md) |
@@ -40,6 +40,7 @@ A small, working reference workspace for Rust services. Copy it to start a new p
 
 ```sh
 make help                                  # list targets
+make check                                 # fmt, clippy, tests and docs (warnings denied)
 cargo test --workspace                     # default feature set
 cargo test --workspace --features tui      # includes the top dashboard
 cargo run -p fw-app -- check --config fw-app.toml
