@@ -1,17 +1,21 @@
 # Security scanning
 
+Who this is for: a maintainer checking which workflows guard this repository and how to verify a release.
+
 The workflows in `.github/workflows/` run these checks. Required status-check names are `test`, `Audit`, `CodeQL` and `dependency-review`.
 
 | Workflow | Runs on | Check | Where findings appear |
 |---|---|---|---|
-| `ci.yml` (`test`) | Pushes, pull requests, manual | `cargo fmt --check`, `cargo clippy -D warnings` with and without `tui`, `cargo test`; all Cargo commands use `--locked` | Actions tab, pull-request check `test` |
+| `ci.yml` (`test`) | Pushes, pull requests, manual | `cargo fmt --all --check`, clippy with warnings denied with and without `tui`, tests with and without `tui`, then `scripts/docs-check.sh` | Actions tab, pull-request check `test` |
 | `audit.yml` (`Audit`) | Pushes, pull requests, daily, manual | `cargo deny check advisories bans licenses sources` from `deny.toml` | Actions tab, pull-request check `Audit` |
 | `dependency-review.yml` (`dependency-review`) | Pull requests | New dependencies with high or critical advisories in any scope, or licenses outside the `deny.toml` allow list | Pull-request check `dependency-review`, Actions tab |
-| `codeql.yml` (`CodeQL`) | Pushes to `main`, pull requests, weekly, manual | CodeQL for Rust, `build-mode: none`; results uploaded as SARIF | Security tab → Code scanning, Actions tab |
-| `scorecard.yml` | Pushes to `main`, weekly | OpenSSF Scorecard, published to the Scorecard API and uploaded as SARIF | Security tab → Code scanning, Scorecard viewer, Actions tab (results artifact, 5 days) |
-| `release.yml` | `v*` tags | Builds the archives, attaches checksums and a CycloneDX JSON SBOM, and creates build provenance attestations | Releases page (assets), Actions tab and `gh attestation verify` (provenance) |
+| `codeql.yml` (`CodeQL`) | Pushes to `main`, pull requests, weekly, manual | CodeQL for Rust, `build-mode: none`; results uploaded as SARIF | Security tab, code scanning, Actions tab |
+| `scorecard.yml` | Pushes to `main`, weekly | OpenSSF Scorecard, published to the Scorecard API and uploaded as SARIF | Security tab, code scanning, Scorecard viewer, Actions tab (results artifact, 5 days) |
+| `release.yml` | `v*` tags | Builds the archives, attaches checksums and a CycloneDX JSON SBOM, and creates build provenance attestations | Releases page assets, Actions tab, `gh attestation verify` |
 
-The license allow list is defined in `deny.toml` and repeated as `allow-licenses` in `dependency-review.yml`; change both together. `scripts/validate-workflows.sh` checks that they match, that all workflow YAML parses, that every `uses:` is pinned to a 40-character SHA with a version comment, and that job permissions stay within the sets the script declares. `make check` runs the local gates: fmt, clippy and tests with and without `tui`, and a doc build with warnings denied.
+The license allow list is defined in `deny.toml` and repeated as `allow-licenses` in `dependency-review.yml`; change both together. `scripts/validate-workflows.sh` checks that they match, that all workflow YAML parses, that every `uses:` is pinned to a 40-character SHA with a version comment, and that job permissions stay within the sets the script declares.
+
+`make check` runs the local gates: fmt, clippy and tests with and without `tui`, and a warnings-denied doc build. `make docs-check` runs the quickstart command blocks in a throwaway directory, parses every config example with the real validator, compares the CLI help text, checks local links and rejects em dashes in the docs. Both are run by CI.
 
 ## Verify a release
 
@@ -32,8 +36,8 @@ shasum -a 256 -c SHA256SUMS
 
 These settings cannot be set from files in the repository:
 
-1. Enable secret scanning and push protection under Settings → Code security and analysis.
-2. Enable Dependabot alerts under Settings → Code security and analysis. The update schedule itself is in `.github/dependabot.yml`.
+1. Enable secret scanning and push protection under Settings, Code security and analysis.
+2. Enable Dependabot alerts under Settings, Code security and analysis. The update schedule itself is in `.github/dependabot.yml`.
 3. Enable private vulnerability reporting so the link in `SECURITY.md` works.
 4. Protect `main`: require a pull request and require the status checks `test`, `Audit`, `CodeQL` and `dependency-review`.
 5. Leave code scanning default setup off; `codeql.yml` and the SARIF upload in `scorecard.yml` supply the results.

@@ -1,0 +1,16 @@
+# rust-framework docs index
+
+- README.md: overview, install, quickstart, configuration, limits and development.
+- AGENTS.md: commands, repo map, conventions and smoke test for agents.
+- SECURITY.md: private reporting, supported versions and response times.
+- CHANGELOG.md: Keep a Changelog entries and upgrade notes.
+- docs/quickstart.md: checkable three-step walkthrough ending in a PASS line.
+- docs/install.md: one-line install, verification, manual build and rollback.
+- docs/configuration.md: key reference with defaults, bounds and parsing examples.
+- docs/operations.md: signals, health, logs, upgrade, rollback and exact messages.
+- docs/security.md: trust boundaries, protections and fail-open behaviour.
+- docs/limits.md: numeric ceilings, non-goals and known gaps.
+- docs/troubleshooting.md: symptom-first fixes for startup and HTTP failures.
+- docs/cli.md: verbatim help text, exit codes and agent notes.
+- docs/architecture.md: crate map, request flow and copy recipe.
+- docs/security-scanning.md: workflow checks and release verification.
