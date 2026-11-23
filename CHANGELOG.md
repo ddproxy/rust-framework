@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Docs: README and `docs/` follow the shared template. Added a quickstart that ends in a PASS line,
+  a configuration reference, limits and non-goals, a security model, a compatibility matrix,
+  operations, troubleshooting, CLI and architecture pages, plus an index and `llms.txt`.
+- Docs checks: `make docs-check` runs the quickstart blocks in a throwaway directory, parses every
+  config example with the real validator, checks CLI and config-key drift, verifies local links and
+  rejects em dashes. CI runs it in the `test` job.
+- `AGENTS.md` added with commands, repo map, conventions and the quickstart smoke test.
+  `SECURITY.md` links to the threat model. Upgrade notes: no operator action required.
 - `fw-auth`: `LoginThrottle::try_attempt` checks and reserves an attempt under one lock, closing
   the concurrent-burst race. `blocked`/`fail` are replaced by this one call.
 - `fw-serve`: saturating helpers for unix timestamps and remaining time; certificate `not_after`

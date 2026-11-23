@@ -2,4 +2,13 @@ site_name: rust-framework
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
+  - Install: install.md
+  - Configuration: configuration.md
+  - Operations: operations.md
+  - Security model: security.md
+  - Limits and non-goals: limits.md
+  - Troubleshooting: troubleshooting.md
+  - CLI: cli.md
+  - Architecture: architecture.md
   - Security scanning: security-scanning.md
